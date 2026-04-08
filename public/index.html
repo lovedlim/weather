@@ -97,11 +97,17 @@
       position: absolute; inset: 0; border-radius: 2px;
       background: linear-gradient(90deg, #4a90ff, #a8d4ff);
       transform-origin: left; transform: scaleX(0);
-      transition: transform 5s cubic-bezier(0.16, 1, 0.3, 1) 1.5s;
     }
     .card.today   .card__bar-fill { background: linear-gradient(90deg, #63a0ff, #c5e0ff); }
     .card.weekend .card__bar-fill { background: linear-gradient(90deg, #ff6e82, #ffb3bc); }
-    .card.animated .card__bar-fill { transform: scaleX(var(--bar-pct, .6)); }
+    /* 카드 등장(cardEnter)과 같은 지연·지속시간으로 채움 — 끝난 뒤가 아니라 함께 움직임 */
+    @keyframes barEnter {
+      from { transform: scaleX(0); }
+      to   { transform: scaleX(var(--bar-pct, 0.6)); }
+    }
+    .card.animate .card__bar-fill {
+      animation: barEnter 5.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+    }
     @keyframes cardEnter {
       from { opacity: 0; transform: translateY(60px) scale(.95); }
       to   { opacity: 1; transform: translateY(0) scale(1); }
@@ -213,7 +219,7 @@
     <div class="scene-zoom">
       <header class="header">
         <p class="header__city" id="headerCity">서울 · 기상청 단기예보</p>
-        <h1 class="header__title">7일 날씨</h1>
+        <h1 class="header__title" id="headerTitle">날씨</h1>
         <p class="header__date" id="headerDate"></p>
       </header>
       <p id="forecastStatus" class="forecast-status" hidden></p>
@@ -225,7 +231,7 @@
       </svg>
       애니메이션 다시 보기
     </button>
-    <p class="footer">기상청 단기예보(공공데이터) · 연결 실패 시에만 예시 데이터</p>
+    <p class="footer">기상청 단기·중기예보(공공데이터) · 중기 기온 API가 0만 반환하는 구간은 온도가 비고 육상만 표시될 수 있음 · 연결 실패 시 예시 데이터</p>
   </div>
 
   <div class="rpanel" id="rpanel">
@@ -2198,7 +2204,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     const { Muxer, ArrayBufferTarget } = Mp4Muxer;
 
     /* ── Data (기상청 단기예보 → /api/forecast) ── */
-    const NUM_DAYS = 7;
+    const MAX_FALLBACK_DAYS = 7;
     let forecastDays = [];
 
     function clientKstYmdPlus(off) {
@@ -2232,7 +2238,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     ];
     function buildFallbackForecastDays() {
       const out = [];
-      for (let i = 0; i < NUM_DAYS; i++) {
+      for (let i = 0; i < MAX_FALLBACK_DAYS; i++) {
         const ymd = clientKstYmdPlus(i);
         const { labelKo, labelEn } = clientWeekdayParts(ymd);
         const m = MOCK_ROW[i % MOCK_ROW.length];
@@ -2256,9 +2262,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         const res = await fetch('/api/forecast');
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || data.detail || res.statusText);
-        if (!Array.isArray(data.days) || data.days.length < NUM_DAYS)
+        if (!Array.isArray(data.days) || data.days.length < 1)
           throw new Error('예보 데이터 형식이 올바르지 않습니다.');
-        forecastDays = data.days.slice(0, NUM_DAYS);
+        forecastDays = data.days;
         el.hidden = true;
         document.getElementById('headerCity').textContent =
           `단기예보 · 격자 (${data.nx}, ${data.ny}) · 발표 ${data.baseDate?.slice(4, 6)}/${data.baseDate?.slice(6, 8)} ${data.baseTime?.slice(0, 2)}:${data.baseTime?.slice(2, 4)}`;
@@ -2277,7 +2283,11 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     const STAGGER  = 750;   /* 카드 간 딜레이 (5× 느림) */
     const CARD_DUR = 6000;  /* 카드 한 장 상승 시간 (5× 느림) */
     const HOLD     = 1400;
-    const TOTAL_MS = (NUM_DAYS - 1) * STAGGER + CARD_DUR + HOLD;
+    function getTotalMs() {
+      const n = forecastDays.length;
+      if (n <= 0) return CARD_DUR + HOLD;
+      return (n - 1) * STAGGER + CARD_DUR + HOLD;
+    }
 
     /* ── Easing: cubic-bezier(0.16, 1, 0.3, 1) ── */
     function mkBezier(p1x, p1y, p2x, p2y) {
@@ -2288,6 +2298,10 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
       return x=>x<=0?0:x>=1?1:s(tx(x),p1y,p2y);
     }
     const ease = mkBezier(0.16, 1, 0.3, 1);
+    /** 막대 너비 전용: ease()는 y>1 구간이 있어 scale/폭이 튀는 현상 방지 */
+    function easeBarWidth(t) {
+      return Math.min(1, Math.max(0, ease(t)));
+    }
 
     /* ── Canvas utils ── */
     function rrect(ctx, x, y, w, h, r) {
@@ -2346,27 +2360,31 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
       const tg=ctx.createLinearGradient(cx-220*sc,0,cx+220*sc,0);
       tg.addColorStop(0,'#fff'); tg.addColorStop(1,'#a8c8ff');
       ctx.fillStyle=tg; const ty=H*.17+22*sc;
-      ctx.fillText('7일 날씨', cx, ty);
+      const nd = Math.max(forecastDays.length, 1);
+      ctx.fillText(`${nd}일 날씨`, cx, ty);
       ctx.font=`400 ${14*sc}px ${FONT}`; ctx.fillStyle='rgba(255,255,255,.38)';
       ctx.fillText(DATE_STR, cx, ty+tsz+10*sc);
       ctx.restore();
     }
 
-    function drawCard(ctx, idx, prog, W, H) {
-      if (prog <= 0) return;
+    function drawCard(ctx, idx, prog, barProg, W, H) {
+      const p = Math.min(1, Math.max(0, prog));
+      if (p <= 0) return;
       const row = forecastDays[idx];
       if (!row) return;
       const sc=W/1920;
       const cw=148*sc, ch=250*sc, gap=15*sc;
-      const x0=(W-(NUM_DAYS*cw+(NUM_DAYS-1)*gap))/2, ytop=H*.42;
+      const n = forecastDays.length;
+      if (n <= 0) return;
+      const x0=(W-(n*cw+(n-1)*gap))/2, ytop=H*.42;
       const cx=x0+idx*(cw+gap)+cw/2, cy=ytop+ch/2;
       const isToday=row.isToday, isWeekend=row.isWeekend;
       const d=row;
 
       ctx.save();
-      ctx.globalAlpha=prog;
-      ctx.translate(cx, cy+(1-prog)*64*sc);
-      ctx.scale(.95+.05*prog,.95+.05*prog);
+      ctx.globalAlpha=p;
+      ctx.translate(cx, cy+(1-p)*64*sc);
+      ctx.scale(.95+.05*p,.95+.05*p);
       ctx.translate(-cx,-cy);
 
       const x=cx-cw/2, y=ytop, r=22*sc;
@@ -2412,7 +2430,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
       const bx=x+14*sc, bw=cw-28*sc, bh=3*sc, by=gy+5*sc;
       ctx.beginPath(); rrect(ctx,bx,by,bw,bh,bh/2);
       ctx.fillStyle='rgba(255,255,255,.07)'; ctx.fill();
-      const fw=bw*(d.bar ?? 0.5)*prog;
+      const fw=bw*(d.bar ?? 0.5)*barProg;
       if (fw>0) {
         const bg=ctx.createLinearGradient(bx,0,bx+bw,0);
         if(isToday){bg.addColorStop(0,'#63a0ff');bg.addColorStop(1,'#c5e0ff');}
@@ -2431,11 +2449,18 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
       ctx.scale(SCENE_ZOOM, SCENE_ZOOM);
       ctx.translate(-W/2, -H/2);
       drawHeader(ctx,W,H);
-      for (let i = 0; i < NUM_DAYS; i++) {
+      for (let i = 0; i < forecastDays.length; i++) {
         const t=Math.max(0,Math.min(1,(timeMs-i*STAGGER)/CARD_DUR));
-        drawCard(ctx,i,ease(t),W,H);
+        drawCard(ctx,i,ease(t),easeBarWidth(t),W,H);
       }
       ctx.restore();
+    }
+
+    function updateHeaderTitle() {
+      const el = document.getElementById('headerTitle');
+      if (!el) return;
+      const n = Math.max(forecastDays.length, 1);
+      el.textContent = `${n}일 날씨`;
     }
 
     /* ── HTML preview ── */
@@ -2460,15 +2485,39 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
           <div class="card__bar"><div class="card__bar-fill"></div></div>`;
         el.appendChild(c);
       });
+      updateHeaderTitle();
     }
+
+    const CARD_STAGGER_S = 0.75;
 
     function runAnimation() {
       const cards=document.querySelectorAll('.card');
-      cards.forEach(c=>{c.classList.remove('animate','animated');c.style.animationDelay='';});
+      cards.forEach((c) => {
+        c.classList.remove('animate', 'animated');
+        c.style.animationDelay = '';
+        const fill = c.querySelector('.card__bar-fill');
+        if (fill) {
+          fill.style.animationDelay = '';
+          fill.style.animation = 'none';
+        }
+      });
       void document.getElementById('cards').offsetHeight;
-      cards.forEach((c,i)=>{
-        c.style.animationDelay=`${i*.75}s`; c.classList.add('animate');
-        c.addEventListener('animationend',()=>c.classList.add('animated'),{once:true});
+      cards.forEach((c, i) => {
+        const delay = `${i * CARD_STAGGER_S}s`;
+        c.style.animationDelay = delay;
+        const fill = c.querySelector('.card__bar-fill');
+        if (fill) {
+          fill.style.removeProperty('animation');
+          fill.style.animationDelay = delay;
+        }
+        c.classList.add('animate');
+        c.addEventListener(
+          'animationend',
+          (e) => {
+            if (e.target === c) c.classList.add('animated');
+          },
+          { once: true },
+        );
       });
     }
 
@@ -2576,7 +2625,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
       setUI('busy');
 
       const {w,h,fps,bitrate} = getSettings();
-      const totalFrames = Math.ceil(TOTAL_MS * fps / 1000);
+      const totalFrames = Math.ceil(getTotalMs() * fps / 1000);
       const msPerFrame  = 1000 / fps;
 
       const canvas = document.getElementById('recCanvas');
@@ -2653,7 +2702,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
       }
 
       /* Final held frame */
-      drawFrame(ctx, w, h, stars, TOTAL_MS);
+      drawFrame(ctx, w, h, stars, getTotalMs());
 
       await encoder.flush();
       muxer.finalize();
