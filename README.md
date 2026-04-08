@@ -27,9 +27,10 @@
 ## 로컬 서버 (선택)
 
 ```bash
-cd /Users/sideonai/Documents/Dev/weather
+git clone https://github.com/lovedlim/weather.git
+cd weather
 python3 -m http.server 8080
-# http://localhost:8080
+# 브라우저에서 http://localhost:8080
 ```
 
 ## 기술 스택
