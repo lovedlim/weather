@@ -1,48 +1,58 @@
 # 날씨 요일 카드 애니메이션
 
-요일별 날씨 카드가 아래에서 위로 순차 등장하는 **단일 HTML** 데모입니다. 브라우저에서 **프레임 단위로 H.264 MP4**를 만들어보낼 수 있습니다 (화면 녹화가 아닌 **WebCodecs + mp4-muxer** 렌더링).
+요일별 날씨 카드가 아래에서 위로 순차 등장하는 웹 UI입니다. **기상청 단기예보**(공공데이터포털)를 Node 서버에서 불러와 표시하고, 브라우저 **WebCodecs**로 H.264 MP4를 프레임 단위 렌더링합니다.
 
-## 기능
+## 구성
 
-- **미리보기**: 글래스모피즘 카드 7장(월~일), 오늘/주말 강조, 별 배경
-- **애니메이션**: `translateY` + `opacity` + `scale`, `cubic-bezier(0.16, 1, 0.3, 1)` easing, 카드별 스태거
-- **줌**: 헤더·카드 영역 약 **130%** 확대 (캔버스 MP4와 동일 비율)
-- **MP4보내기**
-  - 해상도: 1080p / 4K
-  - 프레임: 30fps / 60fps
-  - 품질: 표준 / 고품질(비트레이트)
-  - 렌더 중 **취소** 가능
-  - `fastStart: 'in-memory'` 로 mp4-muxer v5 요구사항 충족
+| 경로 | 설명 |
+|------|------|
+| `server.js` | Express — 정적 파일 + `/api/forecast` (기상청 API 프록시) |
+| `public/index.html` | UI · mp4-muxer 인라인 · 캔버스 렌더 |
+| `.env` | **인증키 (저장소에 넣지 마세요)** |
 
-## 사용 방법
-
-1. [index.html](index.html)을 브라우저로 엽니다 (`file://` 가능 — mp4-muxer는 페이지에 인라인 포함).
-2. **렌더링 시작**으로 MP4 생성 후 자동 다운로드.
-
-## 권장 환경
-
-- **Chrome** 또는 **Edge** (Chromium) — `VideoEncoder` / WebCodecs 지원
-- 4K·60fps·고품질은 GPU·메모리에 따라 수 분 걸릴 수 있음
-
-## 로컬 서버 (선택)
+## 빠른 시작
 
 ```bash
 git clone https://github.com/lovedlim/weather.git
 cd weather
-python3 -m http.server 8080
-# 브라우저에서 http://localhost:8080
+cp .env.example .env
+# .env 에 KMA_SERVICE_KEY= (공공데이터포털 Decoding 인증키) 입력
+npm install
+npm start
+# http://localhost:3000
 ```
+
+- **MP4보내기**는 반드시 `http://localhost:3000` 처럼 **서버를 통해** 열어야 `/api/forecast`와 같은 출처로 동작합니다.
+- `public/index.html`만 `file://`로 열면 API는 호출되지 않고 예시 데이터로 대체됩니다.
+
+### 쿼리 파라미터 (선택)
+
+- `GET /api/forecast` — 기본 격자: `DEFAULT_NX`, `DEFAULT_NY` (서울 시청 근처 기본 `61`, `125`)
+- `GET /api/forecast?nx=60&ny=127` — 격자 직접 지정
+- `GET /api/forecast?lat=37.5665&lon=126.9780` — 위·경도 → 격자 자동 변환
+
+## 기능
+
+- **7일 예보**: 오늘(KST)부터 7일, 요일 라벨·최고/최저(가능한 경우)·SKY/PTY 기반 아이콘
+- **애니메이션**: 느린 상승 + 스태거, 온도 바
+- **줌**: 장면 약 130% (화면·MP4 동일)
+- **MP4**: 1080p/4K, 30/60fps, 품질, 취소, `fastStart: 'in-memory'`
+
+## 권장 브라우저
+
+Chrome 또는 Edge (WebCodecs).
 
 ## 기술 스택
 
-- 순수 HTML / CSS / JavaScript (빌드 없음)
-- [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) v5 (소스 인라인)
-- WebCodecs `VideoEncoder` + `VideoFrame`
+- Node 18+, Express, dotenv
+- 기상청 **단기예보 조회** `getVilageFcst` ([VilageFcstInfoService_2.0](https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0))
+- mp4-muxer v5 (클라이언트 인라인) + `VideoEncoder`
 
-## 데이터
+## 보안
 
-날씨 수치·아이콘은 **예시(mock)** 입니다. 실제 API 연동은 별도 구현이 필요합니다.
+- 인증키는 **환경 변수**로만 두고 Git에 올리지 마세요.
+- 키가 유출된 적이 있다면 공공데이터포털에서 **재발급**하세요.
 
 ## 라이선스
 
-저장소 소유자 정책에 따릅니다.
+저장소 소유자 정책에 따릅니다. 기상청·공공데이터 이용 시 각 이용약관을 따릅니다.

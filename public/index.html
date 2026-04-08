@@ -122,6 +122,12 @@
     .replay-btn:hover svg { transform: rotate(180deg); }
     .footer { font-size: 12px; color: rgba(255,255,255,.2); letter-spacing: .04em; }
 
+    .forecast-status {
+      text-align: center; font-size: 13px; font-weight: 500;
+      color: rgba(180, 210, 255, 0.85); margin: -8px 0 4px; min-height: 1.4em;
+    }
+    .forecast-status.forecast-status--error { color: #ffb4b4; }
+
     /* Render panel */
     .rpanel {
       position: fixed; bottom: 24px; right: 24px; z-index: 200;
@@ -206,10 +212,11 @@
   <div class="page">
     <div class="scene-zoom">
       <header class="header">
-        <p class="header__city">Seoul, Korea</p>
-        <h1 class="header__title">이번 주 날씨</h1>
+        <p class="header__city" id="headerCity">서울 · 기상청 단기예보</p>
+        <h1 class="header__title">7일 날씨</h1>
         <p class="header__date" id="headerDate"></p>
       </header>
+      <p id="forecastStatus" class="forecast-status" hidden></p>
       <div class="cards" id="cards"></div>
     </div>
     <button class="replay-btn" onclick="window._runAnimation()">
@@ -218,7 +225,7 @@
       </svg>
       애니메이션 다시 보기
     </button>
-    <p class="footer">예시 데이터 기반 · mock weather data</p>
+    <p class="footer">기상청 단기예보(공공데이터) · 연결 실패 시에만 예시 데이터</p>
   </div>
 
   <div class="rpanel" id="rpanel">
@@ -2190,28 +2197,87 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     'use strict';
     const { Muxer, ArrayBufferTarget } = Mp4Muxer;
 
-    /* ── Data ── */
-    const DAYS    = ['월','화','수','목','금','토','일'];
-    const DAY_EN  = ['MON','TUE','WED','THU','FRI','SAT','SUN'];
-    const WEATHER = [
-      { icon:'🌤',  condition:'대체로 맑음', high:14, low:6,  bar:.70 },
-      { icon:'☀️',  condition:'맑음',        high:17, low:8,  bar:.85 },
-      { icon:'⛅',  condition:'구름 조금',   high:16, low:9,  bar:.75 },
-      { icon:'🌧',  condition:'비',           high:12, low:7,  bar:.45 },
-      { icon:'🌦',  condition:'흐리고 비',   high:11, low:6,  bar:.40 },
-      { icon:'☀️',  condition:'맑음',        high:18, low:10, bar:.90 },
-      { icon:'🌤',  condition:'대체로 맑음', high:15, low:8,  bar:.65 },
+    /* ── Data (기상청 단기예보 → /api/forecast) ── */
+    const NUM_DAYS = 7;
+    let forecastDays = [];
+
+    function clientKstYmdPlus(off) {
+      const ts = Date.now() + off * 86400000;
+      const p = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+      }).formatToParts(new Date(ts));
+      return `${p.find((x) => x.type === 'year').value}${p.find((x) => x.type === 'month').value}${p.find((x) => x.type === 'day').value}`;
+    }
+    function clientWeekdayParts(ymd) {
+      const y = +ymd.slice(0, 4), m = +ymd.slice(4, 6) - 1, d = +ymd.slice(6, 8);
+      const dt = new Date(Date.UTC(y, m, d, 3, 0, 0));
+      const ko = new Intl.DateTimeFormat('ko-KR', { weekday: 'short', timeZone: 'Asia/Seoul' }).format(dt);
+      const en = new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: 'Asia/Seoul' }).format(dt);
+      return { labelKo: ko.replace(/\.$/, ''), labelEn: en.slice(0, 3).toUpperCase() };
+    }
+    function isWeekendClient(ymd) {
+      const y = +ymd.slice(0, 4), m = +ymd.slice(4, 6) - 1, d = +ymd.slice(6, 8);
+      const dt = new Date(Date.UTC(y, m, d, 3, 0, 0));
+      const day = new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: 'Asia/Seoul' }).format(dt);
+      return day.startsWith('Sat') || day.startsWith('Sun');
+    }
+    const MOCK_ROW = [
+      { icon: '🌤', condition: '대체로 맑음', high: 14, low: 6, bar: 0.7 },
+      { icon: '☀️', condition: '맑음', high: 17, low: 8, bar: 0.85 },
+      { icon: '⛅', condition: '구름 조금', high: 16, low: 9, bar: 0.75 },
+      { icon: '🌧', condition: '비', high: 12, low: 7, bar: 0.45 },
+      { icon: '🌦', condition: '흐리고 비', high: 11, low: 6, bar: 0.4 },
+      { icon: '☀️', condition: '맑음', high: 18, low: 10, bar: 0.9 },
+      { icon: '🌤', condition: '대체로 맑음', high: 15, low: 8, bar: 0.65 },
     ];
-    const jsDay    = new Date().getDay();
-    const TODAY    = jsDay === 0 ? 6 : jsDay - 1;
+    function buildFallbackForecastDays() {
+      const out = [];
+      for (let i = 0; i < NUM_DAYS; i++) {
+        const ymd = clientKstYmdPlus(i);
+        const { labelKo, labelEn } = clientWeekdayParts(ymd);
+        const m = MOCK_ROW[i % MOCK_ROW.length];
+        out.push({
+          ymd, labelKo, labelEn,
+          isWeekend: isWeekendClient(ymd),
+          isToday: i === 0,
+          icon: m.icon, condition: m.condition,
+          high: m.high, low: m.low, bar: m.bar,
+        });
+      }
+      return out;
+    }
+
+    async function loadForecast() {
+      const el = document.getElementById('forecastStatus');
+      el.hidden = false;
+      el.classList.remove('forecast-status--error');
+      el.textContent = '기상청 단기예보 연결 중…';
+      try {
+        const res = await fetch('/api/forecast');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || data.detail || res.statusText);
+        if (!Array.isArray(data.days) || data.days.length < NUM_DAYS)
+          throw new Error('예보 데이터 형식이 올바르지 않습니다.');
+        forecastDays = data.days.slice(0, NUM_DAYS);
+        el.hidden = true;
+        document.getElementById('headerCity').textContent =
+          `단기예보 · 격자 (${data.nx}, ${data.ny}) · 발표 ${data.baseDate?.slice(4, 6)}/${data.baseDate?.slice(6, 8)} ${data.baseTime?.slice(0, 2)}:${data.baseTime?.slice(2, 4)}`;
+      } catch (e) {
+        forecastDays = buildFallbackForecastDays();
+        el.classList.add('forecast-status--error');
+        el.textContent = '연결 실패 — ' + e.message + ' (예시 데이터)';
+        document.getElementById('headerCity').textContent = '서울 · 예시 데이터';
+      }
+    }
+
     const DATE_STR = new Date().toLocaleDateString('ko-KR',
-      { year:'numeric', month:'long', day:'numeric', weekday:'long' });
+      { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
 
     /* animation timing (ms) */
     const STAGGER  = 750;   /* 카드 간 딜레이 (5× 느림) */
     const CARD_DUR = 6000;  /* 카드 한 장 상승 시간 (5× 느림) */
     const HOLD     = 1400;
-    const TOTAL_MS = (DAYS.length - 1) * STAGGER + CARD_DUR + HOLD;
+    const TOTAL_MS = (NUM_DAYS - 1) * STAGGER + CARD_DUR + HOLD;
 
     /* ── Easing: cubic-bezier(0.16, 1, 0.3, 1) ── */
     function mkBezier(p1x, p1y, p2x, p2y) {
@@ -2274,13 +2340,13 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
       const sc=W/1920, cx=W/2;
       ctx.save(); ctx.textAlign='center'; ctx.textBaseline='top';
       ctx.font=`400 ${14*sc}px ${FONT}`; ctx.fillStyle='rgba(255,255,255,.42)';
-      ctx.fillText('SEOUL, KOREA', cx, H*.17);
+      ctx.fillText('KMA VILAGE FCST', cx, H*.17);
       const tsz=52*sc;
       ctx.font=`700 ${tsz}px ${FONT}`;
       const tg=ctx.createLinearGradient(cx-220*sc,0,cx+220*sc,0);
       tg.addColorStop(0,'#fff'); tg.addColorStop(1,'#a8c8ff');
       ctx.fillStyle=tg; const ty=H*.17+22*sc;
-      ctx.fillText('이번 주 날씨', cx, ty);
+      ctx.fillText('7일 날씨', cx, ty);
       ctx.font=`400 ${14*sc}px ${FONT}`; ctx.fillStyle='rgba(255,255,255,.38)';
       ctx.fillText(DATE_STR, cx, ty+tsz+10*sc);
       ctx.restore();
@@ -2288,12 +2354,14 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
     function drawCard(ctx, idx, prog, W, H) {
       if (prog <= 0) return;
+      const row = forecastDays[idx];
+      if (!row) return;
       const sc=W/1920;
       const cw=148*sc, ch=250*sc, gap=15*sc;
-      const x0=(W-(7*cw+6*gap))/2, ytop=H*.42;
+      const x0=(W-(NUM_DAYS*cw+(NUM_DAYS-1)*gap))/2, ytop=H*.42;
       const cx=x0+idx*(cw+gap)+cw/2, cy=ytop+ch/2;
-      const isToday=idx===TODAY, isWeekend=idx>=5;
-      const d=WEATHER[idx];
+      const isToday=row.isToday, isWeekend=row.isWeekend;
+      const d=row;
 
       ctx.save();
       ctx.globalAlpha=prog;
@@ -2324,10 +2392,10 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
       ctx.font=`600 ${12*sc}px ${FONT}`;
       ctx.fillStyle=isToday?'#7db8ff':isWeekend?'#ff8fa0':'rgba(255,255,255,.48)';
-      ctx.fillText(DAY_EN[idx],cx,gy); gy+=19*sc;
+      ctx.fillText(row.labelEn,cx,gy); gy+=19*sc;
 
       ctx.font=`800 ${22*sc}px ${FONT}`; ctx.fillStyle='#fff';
-      ctx.fillText(DAYS[idx],cx,gy); gy+=30*sc;
+      ctx.fillText(row.labelKo,cx,gy); gy+=30*sc;
 
       ctx.font=`${40*sc}px serif`; ctx.fillText(d.icon,cx,gy); gy+=50*sc;
 
@@ -2336,15 +2404,15 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
       ctx.textBaseline='alphabetic';
       ctx.font=`700 ${26*sc}px ${FONT}`; ctx.fillStyle='#fff';
-      ctx.fillText(`${d.high}°`,cx-13*sc,gy+22*sc);
+      ctx.fillText(d.high != null ? `${d.high}°` : '—',cx-13*sc,gy+22*sc);
       ctx.font=`400 ${14*sc}px ${FONT}`; ctx.fillStyle='rgba(255,255,255,.34)';
-      ctx.fillText(`${d.low}°`,cx+19*sc,gy+22*sc);
+      ctx.fillText(d.low != null ? `${d.low}°` : '—',cx+19*sc,gy+22*sc);
       gy+=32*sc;
 
       const bx=x+14*sc, bw=cw-28*sc, bh=3*sc, by=gy+5*sc;
       ctx.beginPath(); rrect(ctx,bx,by,bw,bh,bh/2);
       ctx.fillStyle='rgba(255,255,255,.07)'; ctx.fill();
-      const fw=bw*d.bar*prog;
+      const fw=bw*(d.bar ?? 0.5)*prog;
       if (fw>0) {
         const bg=ctx.createLinearGradient(bx,0,bx+bw,0);
         if(isToday){bg.addColorStop(0,'#63a0ff');bg.addColorStop(1,'#c5e0ff');}
@@ -2363,10 +2431,10 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
       ctx.scale(SCENE_ZOOM, SCENE_ZOOM);
       ctx.translate(-W/2, -H/2);
       drawHeader(ctx,W,H);
-      DAYS.forEach((_,i)=>{
+      for (let i = 0; i < NUM_DAYS; i++) {
         const t=Math.max(0,Math.min(1,(timeMs-i*STAGGER)/CARD_DUR));
         drawCard(ctx,i,ease(t),W,H);
-      });
+      }
       ctx.restore();
     }
 
@@ -2374,19 +2442,20 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     function buildCards() {
       const el=document.getElementById('cards');
       el.innerHTML='';
-      DAYS.forEach((label,i)=>{
-        const d=WEATHER[i];
+      forecastDays.forEach((d,i)=>{
         const c=document.createElement('div');
-        c.className='card'+(i===TODAY?' today':'')+(i>=5?' weekend':'');
-        c.style.setProperty('--bar-pct',d.bar);
+        c.className='card'+(d.isToday?' today':'')+(d.isWeekend?' weekend':'');
+        c.style.setProperty('--bar-pct', String(d.bar ?? 0.5));
+        const hi = d.high != null ? `${d.high}°` : '—';
+        const lo = d.low != null ? `${d.low}°` : '—';
         c.innerHTML=`
-          <span class="card__day">${DAY_EN[i]}</span>
-          <span class="card__label">${label}</span>
+          <span class="card__day">${d.labelEn}</span>
+          <span class="card__label">${d.labelKo}</span>
           <span class="card__icon">${d.icon}</span>
           <span class="card__condition">${d.condition}</span>
           <div class="card__temps">
-            <span class="card__temp-high">${d.high}°</span>
-            <span class="card__temp-low">${d.low}°</span>
+            <span class="card__temp-high">${hi}</span>
+            <span class="card__temp-low">${lo}</span>
           </div>
           <div class="card__bar"><div class="card__bar-fill"></div></div>`;
         el.appendChild(c);
@@ -2603,7 +2672,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
     /* ── Init ── */
     document.getElementById('headerDate').textContent = DATE_STR;
-    createStars(); buildCards();
+    createStars();
+    await loadForecast();
+    buildCards();
     requestAnimationFrame(()=>setTimeout(runAnimation, 150));
 
     window._runAnimation  = runAnimation;
