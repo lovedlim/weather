@@ -9,7 +9,6 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const BASE =
   'https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst';
-const MID_BASE = 'https://apis.data.go.kr/1360000/MidFcstInfoService';
 
 /** 기상청 격자 변환 (위·경도 → nx, ny) */
 function latLonToGrid(lat, lon) {
@@ -55,42 +54,6 @@ function kstYmdPlus(offsetDays) {
     day: '2-digit',
   }).formatToParts(new Date(ts));
   return `${parts.find((p) => p.type === 'year').value}${parts.find((p) => p.type === 'month').value}${parts.find((p) => p.type === 'day').value}`;
-}
-
-/** YYYYMMDD(KST 달력) + deltaDays → YYYYMMDD */
-function ymdAddDays(ymdStr, deltaDays) {
-  const y = +ymdStr.slice(0, 4);
-  const mo = +ymdStr.slice(4, 6) - 1;
-  const d = +ymdStr.slice(6, 8);
-  const next = new Date(Date.UTC(y, mo, d, 12, 0, 0) + deltaDays * 86400000);
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Seoul',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(next);
-  return `${parts.find((p) => p.type === 'year').value}${parts.find((p) => p.type === 'month').value}${parts.find((p) => p.type === 'day').value}`;
-}
-
-/** 중기예보 발표시각(tmFc) 후보: 06·18시, 최신부터 (KST) */
-function getMidTmFcCandidates(maxDaysBack = 4) {
-  const out = [];
-  const now = new Date();
-  for (let back = 0; back < maxDaysBack; back++) {
-    const ref = new Date(now.getTime() - back * 86400000);
-    const ymdParts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Seoul',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).formatToParts(ref);
-    const y = ymdParts.find((p) => p.type === 'year').value;
-    const m = ymdParts.find((p) => p.type === 'month').value;
-    const d = ymdParts.find((p) => p.type === 'day').value;
-    const ymd = `${y}${m}${d}`;
-    out.push(`${ymd}1800`, `${ymd}0600`);
-  }
-  return out;
 }
 
 function ymdToKstWeekdayShort(ymd) {
@@ -211,135 +174,6 @@ async function fetchVilageFcst(serviceKey, nx, ny, baseDate, baseTime) {
   return json;
 }
 
-async function fetchMidJson(path, serviceKey, params) {
-  const u = new URL(`${MID_BASE}/${path}`);
-  u.searchParams.set('serviceKey', serviceKey);
-  u.searchParams.set('pageNo', '1');
-  u.searchParams.set('numOfRows', '10');
-  u.searchParams.set('dataType', 'JSON');
-  for (const [k, v] of Object.entries(params)) {
-    u.searchParams.set(k, String(v));
-  }
-  const res = await fetch(u.toString());
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${text.slice(0, 120)}`);
-  }
-  let json;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    throw new Error('중기예보 API가 JSON이 아닌 응답을 반환했습니다.');
-  }
-  return json;
-}
-
-function firstMidItem(body) {
-  const raw = body?.items?.item;
-  if (!raw) return null;
-  return Array.isArray(raw) ? raw[0] : raw;
-}
-
-function parseTaNum(val) {
-  if (val == null || val === '') return null;
-  const s = String(val).trim();
-  const n = parseFloat(s.replace(/[^0-9.-]/g, ''));
-  return Number.isFinite(n) ? n : null;
-}
-
-/** taMin4 / taMax4 또는 taMin4Low·High 등에서 대표값 */
-function pickTa(item, prefix, kind) {
-  const direct = parseTaNum(item[`${prefix}${kind}`]);
-  if (direct != null) return direct;
-  const lo = parseTaNum(item[`${prefix}${kind}Low`]);
-  const hi = parseTaNum(item[`${prefix}${kind}High`]);
-  if (lo != null && hi != null) return (lo + hi) / 2;
-  if (lo != null) return lo;
-  if (hi != null) return hi;
-  return null;
-}
-
-/** 4~10일차 → 달력 YYYYMMDD (발표일 ymd + 일차; 가이드·샘플 기준) */
-function midIndexToYmd(issueYmd, dayIndex) {
-  const off = Number(process.env.MID_DAY_INDEX_OFFSET || '0');
-  return ymdAddDays(issueYmd, dayIndex + off);
-}
-
-function buildMidTaByYmd(item, tmFc) {
-  const issueYmd = String(tmFc).slice(0, 8);
-  const map = new Map();
-  if (!item) return map;
-  for (let k = 4; k <= 10; k++) {
-    const ymd = midIndexToYmd(issueYmd, k);
-    const low = pickTa(item, `taMin${k}`, '');
-    const high = pickTa(item, `taMax${k}`, '');
-    if (low == null && high == null) continue;
-    const rl = low != null ? Math.round(low) : null;
-    const rh = high != null ? Math.round(high) : null;
-    if (rl === 0 && rh === 0) continue;
-    map.set(ymd, { low: rl, high: rh });
-  }
-  return map;
-}
-
-function wfToCondition(wfText) {
-  const t = String(wfText || '');
-  if (!t) return null;
-  if (/눈|설/.test(t)) return { icon: '❄️', condition: t };
-  if (/비|소나기|빗방울/.test(t)) return { icon: '🌧', condition: t };
-  if (/천둥|번개/.test(t)) return { icon: '⛈', condition: t };
-  if (/흐리/.test(t)) return { icon: '☁️', condition: t };
-  if (/구름/.test(t)) return { icon: '⛅', condition: t };
-  if (/맑/.test(t)) return { icon: '☀️', condition: t };
-  return { icon: '🌤', condition: t };
-}
-
-function mergeWfAmPm(am, pm) {
-  const a = String(am || '').trim();
-  const b = String(pm || '').trim();
-  if (a && b && a === b) return a;
-  if (a && b) return `${a} / ${b}`;
-  return a || b || '';
-}
-
-function buildMidLandByYmd(item, tmFc) {
-  const issueYmd = String(tmFc).slice(0, 8);
-  const map = new Map();
-  if (!item) return map;
-  for (let k = 4; k <= 7; k++) {
-    const ymd = midIndexToYmd(issueYmd, k);
-    const wf = mergeWfAmPm(item[`wf${k}Am`], item[`wf${k}Pm`]);
-    if (wf) map.set(ymd, { wf });
-  }
-  for (const k of [8, 9, 10]) {
-    const ymd = midIndexToYmd(issueYmd, k);
-    const wf = String(item[`wf${k}`] || '').trim();
-    if (wf) map.set(ymd, { wf });
-  }
-  return map;
-}
-
-function mergeMidIntoSummaries(summaries, taMap, landMap) {
-  for (const s of summaries) {
-    const ta = taMap.get(s.ymd);
-    const ld = landMap.get(s.ymd);
-    if (ta) {
-      if (s.high == null && ta.high != null) s.high = ta.high;
-      if (s.low == null && ta.low != null) s.low = ta.low;
-      if (ta.high != null && ta.low == null) s.low = s.high;
-      if (ta.low != null && ta.high == null) s.high = s.low;
-    }
-    if (!s.hasCondition && ld?.wf) {
-      const wf = ld.wf;
-      const c = wfToCondition(wf);
-      if (c) {
-        s.midIcon = c.icon;
-        s.midCondition = wf;
-      }
-    }
-  }
-}
-
 function normalizeItems(body) {
   if (!body?.items) return [];
   const raw = body.items.item;
@@ -425,8 +259,6 @@ app.get('/api/forecast', async (req, res) => {
       error: 'KMA_SERVICE_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.',
     });
   }
-  const midServiceKey =
-    process.env.KMA_MID_SERVICE_KEY?.trim() || serviceKey;
 
   let nx = parseInt(req.query.nx, 10);
   let ny = parseInt(req.query.ny, 10);
@@ -482,68 +314,10 @@ app.get('/api/forecast', async (req, res) => {
   const targetYmds = [];
   for (let i = 0; i < 7; i++) targetYmds.push(kstYmdPlus(i));
 
-  let summaries = targetYmds.map((ymd) => {
+  const summaries = targetYmds.map((ymd) => {
     const list = byDate.get(ymd) || [];
-    return { ymd, ...summarizeDay(list), midIcon: null, midCondition: null };
+    return { ymd, ...summarizeDay(list) };
   });
-
-  const regId =
-    (req.query.regId && String(req.query.regId).trim()) ||
-    process.env.DEFAULT_MID_REG_ID?.trim() ||
-    '11B00000';
-
-  let midTmFcUsed = null;
-  let midError = null;
-  let bestMid = null;
-  try {
-    for (const tmFc of getMidTmFcCandidates()) {
-      let taJson;
-      let landJson;
-      try {
-        [taJson, landJson] = await Promise.all([
-          fetchMidJson('getMidTa', midServiceKey, { regId, tmFc }),
-          fetchMidJson('getMidLandFcst', midServiceKey, { regId, tmFc }),
-        ]);
-      } catch (e) {
-        midError = e.message;
-        continue;
-      }
-      const taCode = taJson?.response?.header?.resultCode;
-      const landCode = landJson?.response?.header?.resultCode;
-      const taItem = firstMidItem(taJson?.response?.body);
-      const landItem = firstMidItem(landJson?.response?.body);
-      const taMap =
-        taCode === '00' && taItem ? buildMidTaByYmd(taItem, tmFc) : new Map();
-      const landMap =
-        landCode === '00' && landItem
-          ? buildMidLandByYmd(landItem, tmFc)
-          : new Map();
-      if (taMap.size === 0 && landMap.size === 0) {
-        midError =
-          taJson?.response?.header?.resultMsg ||
-          landJson?.response?.header?.resultMsg ||
-          taCode ||
-          landCode ||
-          'MID_NO_DATA';
-        continue;
-      }
-      const score = taMap.size * 100 + landMap.size;
-      if (
-        !bestMid ||
-        score > bestMid.score ||
-        (score === bestMid.score && tmFc > bestMid.tmFc)
-      ) {
-        bestMid = { tmFc, taMap, landMap, score };
-      }
-    }
-    if (bestMid) {
-      mergeMidIntoSummaries(summaries, bestMid.taMap, bestMid.landMap);
-      midTmFcUsed = bestMid.tmFc;
-      midError = null;
-    }
-  } catch (e) {
-    midError = e.message;
-  }
 
   let minW = 100;
   let maxW = -100;
@@ -566,9 +340,7 @@ app.get('/api/forecast', async (req, res) => {
     const { labelKo, labelEn } = ymdToKstWeekdayShort(s.ymd);
     const ci = s.hasCondition
       ? toConditionIcon({ maxPty: s.maxPty, maxSky: s.maxSky })
-      : s.midIcon
-        ? { icon: s.midIcon, condition: s.midCondition || '중기' }
-        : { icon: '🌤', condition: '정보 없음' };
+      : { icon: '🌤', condition: '정보 없음' };
     const high = s.high != null ? Math.round(s.high) : null;
     const low = s.low != null ? Math.round(s.low) : null;
     const bar =
@@ -597,13 +369,6 @@ app.get('/api/forecast', async (req, res) => {
     baseTime: usedBase.baseTime,
     nx,
     ny,
-    regId,
-    midTmFc: midTmFcUsed,
-    midTaDays: bestMid?.taMap?.size ?? 0,
-    midLandDays: bestMid?.landMap?.size ?? 0,
-    midTempsSparse:
-      Boolean(bestMid?.landMap?.size && !bestMid?.taMap?.size) || undefined,
-    midError: midError || undefined,
     updatedAt: new Date().toISOString(),
   });
 });

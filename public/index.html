@@ -28,10 +28,27 @@
       padding: 40px 24px 80px; gap: 48px;
     }
     .header { text-align: center; }
-    .header__city {
-      font-size: clamp(14px, 2vw, 16px); font-weight: 400;
-      letter-spacing: 0.3em; text-transform: uppercase;
-      color: rgba(255,255,255,0.45); margin-bottom: 8px;
+    /* 격자·발표 시각 — 줌 영향 없이 좌상단 작은 글씨 */
+    .forecast-meta {
+      position: fixed;
+      top: 12px;
+      left: 14px;
+      z-index: 50;
+      max-width: min(90vw, 380px);
+      font-size: 10px;
+      line-height: 1.4;
+      letter-spacing: 0.02em;
+      font-weight: 400;
+      color: rgba(255, 255, 255, 0.34);
+      text-align: left;
+    }
+    @media (max-width: 600px) {
+      .forecast-meta {
+        top: 10px;
+        left: 10px;
+        font-size: 9px;
+        max-width: 78vw;
+      }
     }
     .header__title {
       font-size: clamp(28px, 5vw, 52px); font-weight: 700; letter-spacing: -0.02em;
@@ -126,7 +143,27 @@
     .replay-btn:active { transform: scale(.97); }
     .replay-btn svg { width: 16px; height: 16px; transition: transform .5s ease; }
     .replay-btn:hover svg { transform: rotate(180deg); }
-    .footer { font-size: 12px; color: rgba(255,255,255,.2); letter-spacing: .04em; }
+    .page-disclaimer {
+      position: fixed;
+      bottom: 14px;
+      left: 14px;
+      z-index: 50;
+      max-width: min(88vw, 360px);
+      font-size: 10px;
+      line-height: 1.4;
+      letter-spacing: 0.02em;
+      font-weight: 400;
+      color: rgba(255, 255, 255, 0.26);
+      text-align: left;
+    }
+    @media (max-width: 600px) {
+      .page-disclaimer {
+        bottom: 10px;
+        left: 10px;
+        font-size: 9px;
+        max-width: calc(100vw - 240px);
+      }
+    }
 
     .forecast-status {
       text-align: center; font-size: 13px; font-weight: 500;
@@ -216,9 +253,9 @@
   <div class="stars" id="stars"></div>
 
   <div class="page">
+    <p class="forecast-meta" id="headerCity" aria-label="예보 출처">서울 · 기상청 단기예보</p>
     <div class="scene-zoom">
       <header class="header">
-        <p class="header__city" id="headerCity">서울 · 기상청 단기예보</p>
         <h1 class="header__title" id="headerTitle">날씨</h1>
         <p class="header__date" id="headerDate"></p>
       </header>
@@ -231,10 +268,10 @@
       </svg>
       애니메이션 다시 보기
     </button>
-    <p class="footer">기상청 단기·중기예보(공공데이터) · 중기 기온 API가 0만 반환하는 구간은 온도가 비고 육상만 표시될 수 있음 · 연결 실패 시 예시 데이터</p>
+    <p class="page-disclaimer">기상청 단기예보(공공데이터) · 연결 실패 시 예시 데이터</p>
   </div>
 
-  <div class="rpanel" id="rpanel">
+  <div class="rpanel is-collapsed" id="rpanel">
     <div class="rpanel__head" onclick="window._togglePanel()">
       <span class="rpanel__title">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -249,8 +286,8 @@
       <div class="rrow">
         <label>해상도</label>
         <div class="ropts" id="resOpts">
-          <button class="ropt is-on" data-w="1920" data-h="1080">1080p</button>
-          <button class="ropt" data-w="3840" data-h="2160">4K</button>
+          <button class="ropt" data-w="1920" data-h="1080">1080p</button>
+          <button class="ropt is-on" data-w="3840" data-h="2160">4K</button>
         </div>
       </div>
       <div class="rrow">
@@ -263,8 +300,8 @@
       <div class="rrow" style="margin-bottom:0">
         <label>품질</label>
         <div class="ropts" id="qualOpts">
-          <button class="ropt is-on" data-br1080="12" data-br4k="40">표준</button>
-          <button class="ropt" data-br1080="24" data-br4k="80">고품질</button>
+          <button class="ropt" data-br1080="12" data-br4k="40">표준</button>
+          <button class="ropt is-on" data-br1080="24" data-br4k="80">고품질</button>
         </div>
       </div>
       <div class="rdivider"></div>
